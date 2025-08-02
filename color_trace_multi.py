@@ -21,11 +21,11 @@
 
 
 # External program commands. Replace with paths to external programs as needed.
-PNGQUANT_PATH               = 'C:\\Users\\mirza\\Downloads\\pngquant-windows\\pngquant\\pngquant'
-PNGNQ_PATH                  = 'C:\\Users\\mirza\\Downloads\\pngquant-windows\\pngquant\\pngquant'
+PNGQUANT_PATH               = 'C:\\Users\\USER\\Downloads\\pngquant-windows\\pngquant\\pngquant'
+PNGNQ_PATH                  = 'C:\\Users\\USER\\Downloads\\pngquant-windows\\pngquant\\pngquant'
 IMAGEMAGICK_CONVERT_PATH    = 'C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick'
 IMAGEMAGICK_IDENTIFY_PATH   = 'C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick'
-POTRACE_PATH                = 'C:\\Users\\mirza\\Downloads\\potrace-1.16.win64\\potrace-1.16.win64\\potrace'
+POTRACE_PATH                = 'C:\\Users\\USER\\Downloads\\potrace-1.16.win64\\potrace-1.16.win64\\potrace'
 
 POTRACE_DPI = 90.0 # potrace docs say it's 72, but this seems to work best
 COMMAND_LEN_NEAR_MAX = 1900 # a low approximate (but not maximum) limit for
@@ -978,3 +978,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
