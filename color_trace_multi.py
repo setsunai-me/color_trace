@@ -21,11 +21,11 @@
 
 
 # External program commands. Replace with paths to external programs as needed.
-PNGQUANT_PATH               = 'pngquant'
-PNGNQ_PATH                  = 'pngnq'
-IMAGEMAGICK_CONVERT_PATH    = 'convert'
-IMAGEMAGICK_IDENTIFY_PATH   = 'identify'
-POTRACE_PATH                = 'potrace'
+PNGQUANT_PATH               = 'C:\\Users\\mirza\\Downloads\\pngquant-windows\\pngquant\\pngquant'
+PNGNQ_PATH                  = 'C:\\Users\\mirza\\Downloads\\pngquant-windows\\pngquant\\pngquant'
+IMAGEMAGICK_CONVERT_PATH    = 'C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick'
+IMAGEMAGICK_IDENTIFY_PATH   = 'C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick'
+POTRACE_PATH                = 'C:\\Users\\mirza\\Downloads\\potrace-1.16.win64\\potrace-1.16.win64\\potrace'
 
 POTRACE_DPI = 90.0 # potrace docs say it's 72, but this seems to work best
 COMMAND_LEN_NEAR_MAX = 1900 # a low approximate (but not maximum) limit for
@@ -42,12 +42,19 @@ from glob import iglob
 import functools
 import queue
 import multiprocessing
+import logging
 import queue
 import tempfile
 import time
 
 from svg_stack import svg_stack
 
+logger = multiprocessing.get_logger()
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('[%(processName)s] %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 def verbose(*args, level=1):
     if VERBOSITY_LEVEL >= level:
@@ -80,7 +87,7 @@ def process_command(command, stdinput=None, stdout_=False, stderr_=False):
     #print(stderror)
     returncode = process.wait()
     if returncode != 0:
-        Exception(stderror.decode())
+        Exception(stderror.decode("utf-8", errors="replace"))
     if stdout_ and not stderr_:
         return stdoutput
     elif stderr_ and not stdout_:
@@ -130,17 +137,19 @@ def quantize(src, destquant, colors, algorithm='mc', dither=None):
 
     elif algorithm == 'mc': #median-cut
         if dither is None:
-            ditheropt = '-nofs '
+            ditheropt = '--nofs '
         elif dither == 'floydsteinberg':
             ditheropt = ''
         else:
             raise ValueError("Invalid dither type '{0}' for 'mc' quantization".format(dither))
         #using stdin/stdout to file since pngquant can't save to a custom output path
-        command = '"{pngquant}" {dither}-force {colors}'.format(
+        command = '"{pngquant}" --force {dither} {colors}'.format(
             pngquant=PNGQUANT_PATH, dither=ditheropt, colors=colors)
         with open(src, 'rb') as srcfile:
             stdinput = srcfile.read()
         stdoutput = process_command(command, stdinput=stdinput, stdout_=True)
+        if stdoutput is None or len(stdoutput) == 0:
+            print("[quantize] Warning: no output from pngquant")
         with open(destquant, 'wb') as destfile:
             destfile.write(stdoutput)
 
@@ -205,6 +214,7 @@ def make_palette(srcimage):
     command = '"{convert}" "{srcimage}" -unique-colors -compress none ppm:-'.format(
         convert = IMAGEMAGICK_CONVERT_PATH, srcimage=srcimage)
     stdoutput = process_command(command, stdout_=True)
+    logger.debug(f"[make_palette] convert output length: {len(stdoutput)}")
 
     # separate stdout ppm image into its colors
     ppm_lines = stdoutput.decode().splitlines()[3:]
@@ -354,7 +364,7 @@ def fill_with_color(src, dest):
 
 def get_width(src):
     """return width of src image in pixels"""
-    command = '"{identify}" -ping -format "%w" "{src}"'.format(
+    command = '"{identify}" identify -ping -format "%w" "{src}"'.format(
         identify=IMAGEMAGICK_IDENTIFY_PATH, src=src)
     stdoutput = process_command(command, stdout_=True)
     width = int(stdoutput)
@@ -590,6 +600,7 @@ def q1_job(q2, total, layers, settings, findex, input, output):
     input: the input path, source png file
     output: the output path, dest svg file
 """
+    logger.debug(f"[q1_job] putting job to q2: file {findex}, layers {layers}, total {total}, input {input}, output {output}")
     # create destination directory if it doesn't exist
     destdir = os.path.dirname(os.path.abspath(output))
 
@@ -601,6 +612,9 @@ def q1_job(q2, total, layers, settings, findex, input, output):
     this_scaled = os.path.abspath(os.path.join(settings['tmp'], '{0}~scaled.png'.format(findex)))
     this_reduced = os.path.abspath(os.path.join(settings['tmp'], '{0}~reduced.png'.format(findex)))
 
+    logger.debug(f"[q1_job] process: this_scaled {this_scaled}")
+    logger.debug(f"[q1_job] process: this_reduced {this_reduced}")
+
     try:
         # when quantization is skipped, must use a scaling method that
         # doesn't increase the number of colors
@@ -610,14 +624,16 @@ def q1_job(q2, total, layers, settings, findex, input, output):
             filter_ = 'lanczos'
         rescale(input, this_scaled, settings['prescale'], filter=filter_)
 
-
         if settings['colors'] is not None:
+            logger.debug(f"Before quantize: checking file {this_scaled}, size: {os.path.getsize(this_scaled) if os.path.exists(this_scaled) else 'no file'}")
             quantize(this_scaled, this_reduced, settings['colors'], algorithm=settings['quantization'], dither=settings['dither'])
+            logger.debug(f"After quantize: checking file {this_reduced}, size: {os.path.getsize(this_reduced) if os.path.exists(this_reduced) else 'no file'}")
         elif settings['remap'] is not None:
             palette_remap(this_scaled, this_reduced, settings['remap'], dither=settings['dither'])
         else:
             #argparse should have caught this
             raise Exception("One of the arguments 'colors' or 'remap' must be specified")
+
         palette = make_palette(this_reduced)
 
         # update total based on the number of colors in palette
@@ -627,20 +643,22 @@ def q1_job(q2, total, layers, settings, findex, input, output):
             total.value -= settings['palettesize'] - len(palette)
         # initialize layers for the file at findex
         layers[findex] += [False] * len(palette)
-
         # get input image width
         width = get_width(input)
-
         # add jobs to the second job queue
+        logger.debug(f"[q1_job] Palette size: {len(palette)}")
+        logger.debug(f"[q1_job] Palette contents: {palette}")
         for i, color in enumerate(palette):
             q2.put({ 'width': width, 'color': color, 'palette': palette, 'reduced': this_reduced, 'output': output, 'findex': findex, 'cindex': i })
 
     except (Exception, KeyboardInterrupt) as e:
         # delete temporary files on exception...
+        logger.debug(f"[q1_job] Exception: {e}")
         remfiles(this_scaled, this_reduced)
         raise e
     else:
         #...or after tracing
+        logger.debug(f"[q1_job] Else of try called")
         remfiles(this_scaled)
 
 
@@ -659,6 +677,8 @@ def q2_job(layers, layers_lock, settings, width, color, palette, findex, cindex,
     reduced: the color-reduced input image
     output: the output path, dest svg file
 """
+    logger.debug(f"[q2_job] Started processing file {findex}, color {cindex}")
+    
     # temporary files will reside next to the respective output file
     this_isolated = os.path.abspath(os.path.join(settings['tmp'], '{0}-{1}~isolated.png'.format(findex, cindex)))
     this_layer = os.path.abspath(os.path.join(settings['tmp'], '{0}-{1}~layer.ppm'.format(findex, cindex)))
@@ -670,13 +690,16 @@ def q2_job(layers, layers_lock, settings, width, color, palette, findex, cindex,
         # simply fill image with matching color else isolate color
         if cindex == 0 and settings['background']:
             verbose("Index {}".format(color))
+            logger.debug("[q2_job] Index {}".format(color))
             fill_with_color(reduced, this_layer)
         else:
+            logger.debug('[q2_job] Color isolating')
             isolate_color(reduced, this_isolated, this_layer, color, palette, stack=settings['stack'])
         # trace for this color, add to svg stack
         trace(this_layer, this_trace, color, settings['despeckle'], settings['smoothcorners'], settings['optimizepaths'], width)
     except (Exception, KeyboardInterrupt) as e:
         # delete temporary files on exception...
+        logger.debug('[q2_job] Excepted: ', e)
         remfiles(reduced, this_isolated, this_layer, this_trace)
         raise e
     else:
@@ -690,6 +713,7 @@ def q2_job(layers, layers_lock, settings, width, color, palette, findex, cindex,
 
         # check if all layers of this file have been traced
         is_last = False not in layers[findex]
+        logger.debug('Last: {is_last}')
     finally:
         layers_lock.release()
 
@@ -707,6 +731,7 @@ def q2_job(layers, layers_lock, settings, width, color, palette, findex, cindex,
         # save stacked output svg
         doc = svg_stack.Document()
         doc.setLayout(layout)
+        logger.debug('OUTPUT {file}')
         with open(output, 'w') as file:
             doc.save(file)
 
@@ -730,28 +755,32 @@ def process_worker(q1, q2, progress, total, layers, layers_lock, settings):
         See color_trace_multi for details of the values
 """
     while True:
-        # try and get a job from q2 before q1 to reduce the total number of
-        # temporary files and memory
-        while not q2.empty():
-            try:
-                job_args = q2.get(block=False)
-                q2_job(layers, layers_lock, settings, **job_args)
-                q2.task_done()
-                progress.value += 1
-            except queue.Empty:
-                break
+        handled = False
 
-        # get a job from q1 since q2 is empty
         try:
-            job_args = q1.get(block=False)
-
-            q1_job(q2, total, layers, settings, **job_args)
-            q1.task_done()
+            job_args = q2.get_nowait()
+            q2_job(layers, layers_lock, settings, **job_args)
+            q2.task_done()
+            with progress.get_lock():
+                progress.value += 1
+            handled = True
         except queue.Empty:
-            time.sleep(.01)
+            pass
+
+        if not handled:
+            try:
+                job_args = q1.get_nowait()
+                q1_job(q2, total, layers, settings, **job_args)
+                q1.task_done()
+                handled = True
+            except queue.Empty:
+                pass
+
+        if not handled:
+            time.sleep(0.01)
         
-        if q2.empty() and q1.empty():
-            break
+        # if q2.empty() and q1.empty():
+        #     break
 
 def color_trace_multi(inputs, outputs, colors, processcount, quantization='mc', dither=None,
     remap=None, stack=False, prescale=2, despeckle=2, smoothcorners=1.0, optimizepaths=0.2, background=False):
@@ -779,13 +808,13 @@ def color_trace_multi(inputs, outputs, colors, processcount, quantization='mc', 
 """
     tmp = tempfile.mkdtemp()
 
-    # create a two job queues
+    # create a two job queues (Two JoinableQueues for inter-process communication)
     # q1 = scaling + color reduction
     q1 = multiprocessing.JoinableQueue()
     # q2 = isolation + tracing
     q2 = multiprocessing.JoinableQueue()
 
-    # create a manager to share the layers between processes
+    # create a manager to share the layers (data structures, variables below) between processes
     manager = multiprocessing.Manager()
     layers = []
     for i in range(min(len(inputs), len(outputs))):
@@ -796,6 +825,8 @@ def color_trace_multi(inputs, outputs, colors, processcount, quantization='mc', 
     # create a shared memory counter of completed and total tasks for measuring progress
     progress = multiprocessing.Value('i', 0)
     if colors is not None:
+        # If colors is provided, assume each input file will generate colors number of tracing jobs.
+        # total represents the total expected work (number of q2 jobs).
         # this is only an estimate because quantization can result in less colors
         # than in the "colors" variable. This value is corrected by q1 tasks to converge
         # on the real total.
@@ -811,10 +842,29 @@ def color_trace_multi(inputs, outputs, colors, processcount, quantization='mc', 
         #argparse should have caught this
         raise Exception("One of the arguments 'colors' or 'remap' must be specified")
 
+    verbose("Total number of estimated tasks: {0}".format(total.value))
+
     # create and start processes
     processes = []
+    local_variables = {
+        'quantization': quantization,
+        'dither': dither,
+        'remap': remap,
+        'stack': stack,
+        'prescale': prescale,
+        'despeckle': despeckle,
+        'smoothcorners': smoothcorners,
+        'optimizepaths': optimizepaths,
+        'colors': colors,
+        'tmp': tmp,
+        'background': background,
+        'palettesize': palettesize if remap is not None else None
+    }
+
+    # start <processcount> processes, where each process will run process_worker
+    # process_worker will check if there are any jobs in q1 or q2, and will process them
     for i in range(processcount):
-        p = multiprocessing.Process(target=process_worker, args=(q1, q2, progress, total, layers, layers_lock, locals()))
+        p = multiprocessing.Process(target=process_worker, args=(q1, q2, progress, total, layers, layers_lock, local_variables))
         p.name = "color_trace worker #" + str(i)
         p.start()
         processes.append(p)
@@ -822,11 +872,10 @@ def color_trace_multi(inputs, outputs, colors, processcount, quantization='mc', 
     try:
         # so for each input and (dir-appended) output...
         for index, (i, o) in enumerate(zip(inputs, outputs)):
-            verbose(i, ' -> ', o)
+            verbose(i, ' -> ', o, ' (', index+1, '/', len(inputs), ')')
 
             # add a job to the first job queue
             q1.put({ 'input': i, 'output': o, 'findex': index })
-
 
         # show progress until all jobs have been completed
         while progress.value < total.value:
@@ -841,15 +890,17 @@ def color_trace_multi(inputs, outputs, colors, processcount, quantization='mc', 
         q2.join()
     except (Exception, KeyboardInterrupt) as e:
         # shut down subproesses
+        logging.debug('[DEVELOPMENT] Shutdown subprocess called by exception: {e}')
         for p in processes:
             p.terminate()
         shutil.rmtree(tmp)
         raise e
-
     # close all processes
     for p in processes:
         p.terminate()
     shutil.rmtree(tmp)
+
+    sys.stdout.write("\rcolor_trace_multi function end!\n")
 
 
 def remfiles(*filepaths):
@@ -874,6 +925,7 @@ def main(args=None):
         VERBOSITY_LEVEL = 1
 
     # set output filename pattern depending on --output argument
+    # output_pattern is args.directory + args.output or "{0}.svg"
     if args.output is None:
         output_pattern = "{0}.svg"
     elif '*' in args.output:
@@ -896,18 +948,24 @@ def main(args=None):
     else:
         processcount = args.cores
 
+    verbose(f"Number of cores to use: {processcount}")
+
     # collect only those arguments needed for color_trace_multi
     inputs_outputs = zip(*get_inputs_outputs(args.input, output_pattern))
+
     try:
         inputs, outputs = inputs_outputs
     except ValueError: #nothing to unpack
         inputs, outputs = [], []
+
     if args.floydsteinberg:
         dither = 'floydsteinberg'
     elif args.riemersma:
         dither = 'riemersma'
     else:
         dither = None
+
+
     colors = args.colors
     color_trace_kwargs = vars(args)
     for k in ('colors', 'directory', 'input', 'output', 'cores', 'floydsteinberg', 'riemersma', 'verbose'):
